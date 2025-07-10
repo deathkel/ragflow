@@ -154,13 +154,15 @@ def chat_completion(tenant_id, chat_id):
         req = {"question": ""}
     if not req.get("session_id"):
         req["question"] = ""
+    # Extract incremental_response parameter with default False for backward compatibility
+    incremental_response = req.get("incremental_response", False)
     if not DialogService.query(tenant_id=tenant_id, id=chat_id, status=StatusEnum.VALID.value):
         return get_error_data_result(f"You don't own the chat {chat_id}")
     if req.get("session_id"):
         if not ConversationService.query(id=req["session_id"], dialog_id=chat_id):
             return get_error_data_result(f"You don't own the session {req['session_id']}")
     if req.get("stream", True):
-        resp = Response(rag_completion(tenant_id, chat_id, **req), mimetype="text/event-stream")
+        resp = Response(rag_completion(tenant_id, chat_id, incremental_response=incremental_response, **req), mimetype="text/event-stream")
         resp.headers.add_header("Cache-control", "no-cache")
         resp.headers.add_header("Connection", "keep-alive")
         resp.headers.add_header("X-Accel-Buffering", "no")
@@ -169,7 +171,7 @@ def chat_completion(tenant_id, chat_id):
         return resp
     else:
         answer = None
-        for ans in rag_completion(tenant_id, chat_id, **req):
+        for ans in rag_completion(tenant_id, chat_id, incremental_response=incremental_response, **req):
             answer = ans
             break
         return get_result(data=answer)
@@ -233,6 +235,8 @@ def chat_completion_openai_like(tenant_id, chat_id):
     prompt = messages[-1]["content"]
     # Treat context tokens as reasoning tokens
     context_token_used = sum(len(message["content"]) for message in messages)
+    # Extract incremental_response parameter with default False for backward compatibility
+    incremental_response = req.get("incremental_response", False)
 
     dia = DialogService.query(tenant_id=tenant_id, id=chat_id, status=StatusEnum.VALID.value)
     if not dia:
@@ -272,7 +276,7 @@ def chat_completion_openai_like(tenant_id, chat_id):
             }
 
             try:
-                for ans in chat(dia, msg, True, toolcall_session=toolcall_session, tools=tools):
+                for ans in chat(dia, msg, True, incremental_response=incremental_response, toolcall_session=toolcall_session, tools=tools):
                     answer = ans["answer"]
 
                     reasoning_match = re.search(r"<think>(.*?)</think>", answer, flags=re.DOTALL)
@@ -335,7 +339,7 @@ def chat_completion_openai_like(tenant_id, chat_id):
         return resp
     else:
         answer = None
-        for ans in chat(dia, msg, False, toolcall_session=toolcall_session, tools=tools):
+        for ans in chat(dia, msg, False, incremental_response=incremental_response, toolcall_session=toolcall_session, tools=tools):
             # focus answer content only
             answer = ans
             break

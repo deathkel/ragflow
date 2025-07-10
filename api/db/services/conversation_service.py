@@ -75,7 +75,7 @@ def structure_answer(conv, ans, message_id, session_id):
     return ans
 
 
-def completion(tenant_id, chat_id, question, name="New session", session_id=None, stream=True, **kwargs):
+def completion(tenant_id, chat_id, question, name="New session", session_id=None, stream=True, incremental_response=False, **kwargs):
     assert name, "`name` can not be empty."
     dia = DialogService.query(id=chat_id, tenant_id=tenant_id, status=StatusEnum.VALID.value)
     assert dia, "You do not own the chat."
@@ -133,7 +133,7 @@ def completion(tenant_id, chat_id, question, name="New session", session_id=None
 
     if stream:
         try:
-            for ans in chat(dia, msg, True, **kwargs):
+            for ans in chat(dia, msg, True, incremental_response=incremental_response, **kwargs):
                 ans = structure_answer(conv, ans, message_id, session_id)
                 yield "data:" + json.dumps({"code": 0, "data": ans}, ensure_ascii=False) + "\n\n"
             ConversationService.update_by_id(conv.id, conv.to_dict())
@@ -145,7 +145,7 @@ def completion(tenant_id, chat_id, question, name="New session", session_id=None
 
     else:
         answer = None
-        for ans in chat(dia, msg, False, **kwargs):
+        for ans in chat(dia, msg, False, incremental_response=incremental_response, **kwargs):
             answer = structure_answer(conv, ans, message_id, session_id)
             ConversationService.update_by_id(conv.id, conv.to_dict())
             break
