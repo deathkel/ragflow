@@ -189,7 +189,7 @@ def repair_bad_citation_formats(answer: str, kbinfos: dict, idx: set):
     return answer, idx
 
 
-def chat(dialog, messages, stream=True, **kwargs):
+def chat(dialog, messages, stream=True, incremental_response=False, **kwargs):
     assert messages[-1]["role"] == "user", "The last content of this conversation is not from user."
     if not dialog.kb_ids and not dialog.prompt_config.get("tavily_api_key"):
         for ans in chat_solo(dialog, messages, stream):
@@ -423,10 +423,14 @@ def chat(dialog, messages, stream=True, **kwargs):
             if num_tokens_from_string(delta_ans) < 16:
                 continue
             last_ans = answer
-            yield {"answer": thought + answer, "reference": {}, "audio_binary": tts(tts_mdl, delta_ans)}
+            # Control answer content based on incremental_response parameter
+            answer_content = delta_ans if incremental_response else thought + answer
+            yield {"answer": answer_content, "reference": {}, "audio_binary": tts(tts_mdl, delta_ans)}
         delta_ans = answer[len(last_ans) :]
         if delta_ans:
-            yield {"answer": thought + answer, "reference": {}, "audio_binary": tts(tts_mdl, delta_ans)}
+            # Control answer content based on incremental_response parameter
+            answer_content = delta_ans if incremental_response else thought + answer
+            yield {"answer": answer_content, "reference": {}, "audio_binary": tts(tts_mdl, delta_ans)}
         yield decorate_answer(thought + answer)
     else:
         answer = chat_mdl.chat(prompt + prompt4citation, msg[1:], gen_conf)
