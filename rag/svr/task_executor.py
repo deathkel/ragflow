@@ -306,12 +306,59 @@ async def build_chunks(task, progress_callback):
                     try:
                         d["image"].save(output_buffer, format='JPEG', optimize=False, progressive=False, quality=85)
                     except (OSError, io.UnsupportedOperation) as e:
-                        # 降级到临时文件方式
-                        with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp_file:
-                            d["image"].save(tmp_file.name, format='JPEG', quality=85)
-                            with open(tmp_file.name, 'rb') as f:
-                                output_buffer.write(f.read())
-                            os.unlink(tmp_file.name)
+                        # 第二层：临时文件JPEG（带optimize=False）
+                        try:
+                            with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp_file:
+                                d["image"].save(tmp_file.name, format='JPEG', quality=85, optimize=False)
+                                with open(tmp_file.name, 'rb') as f:
+                                    output_buffer.write(f.read())
+                                os.unlink(tmp_file.name)
+                        except (OSError, Exception) as e2:
+                            # 第三层：PNG格式保存
+                            try:
+                                with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp_file:
+                                    d["image"].save(tmp_file.name, format='PNG', optimize=False)
+                                    with open(tmp_file.name, 'rb') as f:
+                                        output_buffer.write(f.read())
+                                    os.unlink(tmp_file.name)
+                            except (OSError, Exception) as e3:
+                                # 第四层：图像重建后保存
+                                try:
+                                    # 创建新的图像对象
+                                    img_array = np.array(d["image"])
+                                    from PIL import Image
+                                    new_image = Image.fromarray(img_array)
+                                    if new_image.mode in ("RGBA", "P"):
+                                        new_image = new_image.convert("RGB")
+                                    
+                                    with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp_file:
+                                        new_image.save(tmp_file.name, format='PNG')
+                                        with open(tmp_file.name, 'rb') as f:
+                                            output_buffer.write(f.read())
+                                        os.unlink(tmp_file.name)
+                                    new_image.close()
+                                except Exception as e4:
+                                    # 第五层：跳过图像，记录详细错误信息
+                                    image_url = f"kb_id:{task.get('kb_id', 'unknown')}/doc_id:{d.get('doc_id', 'unknown')}/chunk_id:{d.get('id', 'unknown')}"
+                                    image_info = {
+                                        "url": image_url,
+                                        "file": task.get("location", "unknown"),
+                                        "chunk_content_preview": str(d.get("content_with_weight", ""))[:100] + "..." if d.get("content_with_weight") else "no_content"
+                                    }
+                                    logging.warning(
+                                        "Failed to save image after all attempts. Image URL: {}. File: {}. Chunk preview: {}. "
+                                        "Errors: JPEG_BytesIO={}, JPEG_file={}, PNG_file={}, rebuild={}".format(
+                                            image_url, task.get("location", "unknown"), 
+                                            image_info["chunk_content_preview"],
+                                            str(e), str(e2), str(e3), str(e4)
+                                        ))
+                                    # 移除图像引用，继续处理
+                                    if not isinstance(d["image"], bytes):
+                                        d["image"].close()
+                                    del d["image"]
+                                    d["img_id"] = ""
+                                    docs.append(d)
+                                    return
 
                 async with minio_limiter:
                     await trio.to_thread.run_sync(lambda: STORAGE_IMPL.put(task["kb_id"], d["id"], output_buffer.getvalue()))
@@ -323,9 +370,10 @@ async def build_chunks(task, progress_callback):
             finally:
                 output_buffer.close()  # Ensure BytesIO is always closed
         except Exception as e:
+            image_url = f"kb_id:{task.get('kb_id', 'unknown')}/doc_id:{d.get('doc_id', 'unknown')}/chunk_id:{d.get('id', 'unknown')}"
             logging.exception(
-                "Saving image of chunk {}/{}/{} got exception: {}. Image mode: {}, Image size: {}".format(
-                    task["location"], task["name"], d["id"], str(e), 
+                "Saving image of chunk {}/{}/{} got exception: {}. Image URL: {}. Image mode: {}, Image size: {}".format(
+                    task["location"], task["name"], d["id"], str(e), image_url,
                     getattr(d.get("image"), "mode", "unknown") if d.get("image") else "no_image",
                     getattr(d.get("image"), "size", "unknown") if d.get("image") else "no_image"
                 ))
