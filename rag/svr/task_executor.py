@@ -36,6 +36,8 @@ import copy
 import re
 from functools import partial
 from io import BytesIO
+import tempfile
+import io
 from multiprocessing.context import TimeoutError
 from timeit import default_timer as timer
 import tracemalloc
@@ -301,7 +303,15 @@ async def build_chunks(task, progress_callback):
                         converted_image = d["image"].convert("RGB")
                         d["image"].close()  # Close original image
                         d["image"] = converted_image
-                    d["image"].save(output_buffer, format='JPEG')
+                    try:
+                        d["image"].save(output_buffer, format='JPEG', optimize=False, progressive=False, quality=85)
+                    except (OSError, io.UnsupportedOperation) as e:
+                        # 降级到临时文件方式
+                        with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp_file:
+                            d["image"].save(tmp_file.name, format='JPEG', quality=85)
+                            with open(tmp_file.name, 'rb') as f:
+                                output_buffer.write(f.read())
+                            os.unlink(tmp_file.name)
 
                 async with minio_limiter:
                     await trio.to_thread.run_sync(lambda: STORAGE_IMPL.put(task["kb_id"], d["id"], output_buffer.getvalue()))
@@ -312,9 +322,13 @@ async def build_chunks(task, progress_callback):
                 docs.append(d)
             finally:
                 output_buffer.close()  # Ensure BytesIO is always closed
-        except Exception:
+        except Exception as e:
             logging.exception(
-                "Saving image of chunk {}/{}/{} got exception".format(task["location"], task["name"], d["id"]))
+                "Saving image of chunk {}/{}/{} got exception: {}. Image mode: {}, Image size: {}".format(
+                    task["location"], task["name"], d["id"], str(e), 
+                    getattr(d.get("image"), "mode", "unknown") if d.get("image") else "no_image",
+                    getattr(d.get("image"), "size", "unknown") if d.get("image") else "no_image"
+                ))
             raise
 
     async with trio.open_nursery() as nursery:
